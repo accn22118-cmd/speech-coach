@@ -227,7 +227,9 @@ class SpeechAnalyzer:
         """
         try:
             with wave.open(str(audio_path), "rb") as wf:
-                n_channels, sampwidth, framerate, n_frames, comptype, compname = wf.getparams()
+                n_channels, sampwidth, framerate, n_frames, comptype, compname = (
+                    wf.getparams()
+                )
 
                 # Ожидаем моно 16-bit PCM
                 if n_channels != 1 or sampwidth != 2:
@@ -327,8 +329,9 @@ class SpeechAnalyzer:
             if p["duration"] >= LONG_PAUSE_SEC
         ]
         # Топ-3 самых длинных
-        long_pauses = sorted(
-            long_pauses, key=lambda p: p["duration"], reverse=True)[:3]
+        long_pauses = sorted(long_pauses, key=lambda p: p["duration"], reverse=True)[
+            :3
+        ]
 
         return PausesStats(
             count=count,
@@ -385,7 +388,7 @@ class SpeechAnalyzer:
             if is_boundary:
                 # фраза заканчивается на этом сегменте
                 phrase_end_idx = idx
-                segs = segments[phrase_start_idx: phrase_end_idx + 1]
+                segs = segments[phrase_start_idx : phrase_end_idx + 1]
                 if segs:
                     dur, wcount = self._phrase_metrics(segs)
                     if wcount > 0 and dur > 0:
@@ -396,7 +399,7 @@ class SpeechAnalyzer:
 
             if is_last_seg and phrase_start_idx <= idx:
                 # закрываем последнюю фразу (если не закрыли выше)
-                segs = segments[phrase_start_idx: idx + 1]
+                segs = segments[phrase_start_idx : idx + 1]
                 if segs:
                     dur, wcount = self._phrase_metrics(segs)
                     if wcount > 0 and dur > 0:
@@ -499,10 +502,13 @@ class SpeechAnalyzer:
             speech_severity = "info"
         elif words_per_minute < MIN_COMFORT_WPM:
             speech_observation = (
-                f"Оценённый темп речи составляет примерно {
-                    words_per_minute:.1f} слов в минуту, "
-                f"что ниже типичного диапазона публичных выступлений "
-                f"({MIN_COMFORT_WPM:.0f}–{MAX_COMFORT_WPM:.0f} слов в минуту)."
+                "Оценённый темп речи составляет примерно {wpm:.1f} слов в минуту, "
+                "что ниже типичного диапазона публичных выступлений "
+                "({min_wpm:.0f}–{max_wpm:.0f} слов в минуту)."
+            ).format(
+                wpm=words_per_minute,
+                min_wpm=MIN_COMFORT_WPM,
+                max_wpm=MAX_COMFORT_WPM,
             )
             speech_recommendation = (
                 "Если цель — более динамичная подача материала, имеет смысл немного ускорить речь, "
@@ -511,10 +517,13 @@ class SpeechAnalyzer:
             speech_severity = "suggestion"
         elif words_per_minute > MAX_COMFORT_WPM:
             speech_observation = (
-                f"Оценённый темп речи составляет примерно {
-                    words_per_minute:.1f} слов в минуту, "
-                f"что выше типичного диапазона публичных выступлений "
-                f"({MIN_COMFORT_WPM:.0f}–{MAX_COMFORT_WPM:.0f} слов в минуту)."
+                "Оценённый темп речи составляет примерно {wpm:.1f} слов в минуту, "
+                "что выше типичного диапазона публичных выступлений "
+                "({min_wpm:.0f}–{max_wpm:.0f} слов в минуту)."
+            ).format(
+                wpm=words_per_minute,
+                min_wpm=MIN_COMFORT_WPM,
+                max_wpm=MAX_COMFORT_WPM,
             )
             speech_recommendation = (
                 "Рекомендуется слегка замедлить подачу, делая более заметные логические паузы "
@@ -523,10 +532,9 @@ class SpeechAnalyzer:
             speech_severity = "suggestion"
         else:
             speech_observation = (
-                f"Оценённый темп речи составляет примерно {
-                    words_per_minute:.1f} слов в минуту, "
+                "Оценённый темп речи составляет примерно {wpm:.1f} слов в минуту, "
                 "что находится в пределах типичного диапазона публичных выступлений."
-            )
+            ).format(wpm=words_per_minute)
             speech_recommendation = (
                 "Сохраняйте выбранный темп и при необходимости варьируйте его для "
                 "подчёркивания ключевых смысловых блоков."
@@ -544,8 +552,7 @@ class SpeechAnalyzer:
         )
 
         # --- 2. Слова-паразиты ---
-        fillers_per_100 = (filler_total / words_total *
-                           100) if words_total else 0.0
+        fillers_per_100 = (filler_total / words_total * 100) if words_total else 0.0
 
         if filler_total == 0:
             filler_observation = (
@@ -559,9 +566,9 @@ class SpeechAnalyzer:
             filler_severity = "info"
         elif fillers_per_100 <= 3:
             filler_observation = (
-                f"Слова-паразиты присутствуют, но их доля невелика — порядка "
-                f"{fillers_per_100:.1f} на каждые 100 слов."
-            )
+                "Слова-паразиты присутствуют, но их доля невелика — порядка "
+                "{value:.1f} на каждые 100 слов."
+            ).format(value=fillers_per_100)
             filler_recommendation = (
                 "Такой уровень слов-паразитов обычно не мешает восприятию. "
                 "При желании можно дополнительно снизить их количество за счёт "
@@ -570,26 +577,24 @@ class SpeechAnalyzer:
             filler_severity = "info"
         elif fillers_per_100 <= 8:
             filler_observation = (
-                f"Доля слов-паразитов составляет примерно {
-                    fillers_per_100:.1f} на каждые 100 слов, "
+                "Доля слов-паразитов составляет примерно {value:.1f} на каждые 100 слов, "
                 "что может слегка утяжелять восприятие речи."
-            )
+            ).format(value=fillers_per_100)
             filler_recommendation = (
                 "Рекомендуется обратить внимание на наиболее часто повторяющиеся конструкции "
-                "(например, 'как бы', 'типа', 'you know', 'like') и осознанно заменять их "
+                "(например, «как бы», «типа», «you know», «like») и осознанно заменять их "
                 "короткими паузами или нейтральными связками."
             )
             filler_severity = "suggestion"
         else:
             filler_observation = (
-                f"Доля слов-паразитов составляет примерно {
-                    fillers_per_100:.1f} на каждые 100 слов. "
+                "Доля слов-паразитов составляет примерно {value:.1f} на каждые 100 слов. "
                 "Это достаточно высокий показатель, который заметно снижает чёткость речи."
-            )
+            ).format(value=fillers_per_100)
             filler_recommendation = (
                 "Рекомендуется специально потренировать фрагменты выступления без слов-паразитов, "
                 "используя записи и самопроверку. Полезно делать сознательные паузы "
-                "вместо автоматических вставок ('ну', 'типа', 'как бы', 'uh', 'um' и т.п.)."
+                "вместо автоматических вставок («ну», «типа», «как бы», «uh», «um» и т.п.)."
             )
             filler_severity = "warning"
 
@@ -615,14 +620,15 @@ class SpeechAnalyzer:
             pauses_severity = "info"
         else:
             long_count = len(pauses_stats.long_pauses)
-            long_fraction = long_count / pauses_stats.count if pauses_stats.count > 0 else 0.0
+            long_fraction = (
+                long_count / pauses_stats.count if pauses_stats.count > 0 else 0.0
+            )
 
             if long_count > 0 and long_fraction > 0.3:
                 pauses_observation = (
-                    f"В речи обнаружены длинные паузы (до {
-                        pauses_stats.max_sec:.1f} секунд), "
+                    "В речи обнаружены длинные паузы (до {max_sec:.1f} секунд), "
                     "и их доля среди всех пауз достаточно велика."
-                )
+                ).format(max_sec=pauses_stats.max_sec)
                 pauses_recommendation = (
                     "Рекомендуется заранее продумывать переходы между блоками выступления, "
                     "чтобы заполнять длинные паузы чёткими вводными фразами или кратким "
@@ -631,9 +637,9 @@ class SpeechAnalyzer:
                 pauses_severity = "suggestion"
             else:
                 pauses_observation = (
-                    f"В речи присутствуют паузы (средняя длительность около "
-                    f"{pauses_stats.avg_sec:.1f} секунд), их использование выглядит естественным."
-                )
+                    "В речи присутствуют паузы (средняя длительность около "
+                    "{avg_sec:.1f} секунд), их использование выглядит естественным."
+                ).format(avg_sec=pauses_stats.avg_sec)
                 pauses_recommendation = (
                     "Сохраняйте подобный баланс: паузы помогают аудитории обрабатывать информацию "
                     "и воспринимать структуру выступления."
@@ -664,12 +670,13 @@ class SpeechAnalyzer:
             phr_severity = "info"
         else:
             phr_observation = (
-                f"Средняя длина фразы составляет около {
-                    phrase_stats.avg_words:.1f} слов "
-                f"(~{phrase_stats.avg_duration_sec:.1f} секунд). "
+                "Средняя длина фразы составляет около {avg_words:.1f} слов "
+                "(примерно {avg_dur:.1f} секунд). "
+            ).format(
+                avg_words=phrase_stats.avg_words,
+                avg_dur=phrase_stats.avg_duration_sec,
             )
 
-            # Оценка по длине фраз
             if phrase_stats.length_classification == "short_phrases":
                 phr_observation += (
                     "Фразы в основном короткие, структура может восприниматься несколько "
@@ -700,7 +707,6 @@ class SpeechAnalyzer:
                 )
                 phr_severity = "info"
 
-            # Комментарий по вариативности ритма
             if phrase_stats.rhythm_variation == "uniform":
                 phr_observation += (
                     " Длительность фраз и пауз относительно равномерна, ритм выступления стабилен."
