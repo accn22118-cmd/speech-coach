@@ -461,14 +461,29 @@ class SpeechAnalyzer:
         phrase_start_idx = 0
 
         for idx in range(len(segments)):
-            if idx in boundary_after_idx:
-                self._process_phrase(
-                    segments, phrase_start_idx, idx, phrases_durations, phrases_words)
+            is_boundary = idx in boundary_after_idx
+            is_last_seg = idx == len(segments) - 1
+
+            if is_boundary:
+                # фраза заканчивается на этом сегменте
+                phrase_end_idx = idx
+                segs = segments[phrase_start_idx: phrase_end_idx + 1]
+                if segs:
+                    dur, wcount = self._phrase_metrics(segs)
+                    if wcount > 0 and dur > 0:
+                        phrases_durations.append(dur)
+                        phrases_words.append(wcount)
+                # следующая фраза начинается со следующего сегмента
                 phrase_start_idx = idx + 1
 
-            if idx == len(segments) - 1 and phrase_start_idx <= idx:
-                self._process_phrase(
-                    segments, phrase_start_idx, idx, phrases_durations, phrases_words)
+            if is_last_seg and phrase_start_idx <= idx:
+                # закрываем последнюю фразу (если не закрыли выше)
+                segs = segments[phrase_start_idx: idx + 1]
+                if segs:
+                    dur, wcount = self._phrase_metrics(segs)
+                    if wcount > 0 and dur > 0:
+                        phrases_durations.append(dur)
+                        phrases_words.append(wcount)
 
         if not phrases_words:
             return PhraseStats(
@@ -582,20 +597,27 @@ class SpeechAnalyzer:
             speech_rec = "Замедлите подачу, делая более заметные паузы."
             speech_sev = "suggestion"
         else:
-            speech_obs = f"Темп речи примерно {
-                words_per_minute:.1f} слов в минуту в пределах нормы."
-            speech_rec = "Сохраняйте выбранный темп."
-            speech_sev = "info"
+            speech_observation = (
+                "Оценённый темп речи составляет примерно {wpm:.1f} слов в минуту, "
+                "что находится в пределах типичного диапазона публичных выступлений."
+            ).format(wpm=words_per_minute)
+            speech_recommendation = (
+                "Сохраняйте выбранный темп и при необходимости варьируйте его для "
+                "подчёркивания ключевых смысловых блоков."
+            )
+            speech_severity = "info"
 
-        advice.append(AdviceItem(
-            category="speech_rate",
-            severity=speech_sev,
-            title="Темп речи",
-            observation=speech_obs,
-            recommendation=speech_rec,
-        ))
+        advice.append(
+            AdviceItem(
+                category="speech_rate",
+                severity=speech_severity,  # type: ignore[arg-type]
+                title="Темп речи",
+                observation=speech_observation,
+                recommendation=speech_recommendation,
+            )
+        )
 
-        # 2. Слова-паразиты
+        # --- 2. Слова-паразиты ---
         fillers_per_100 = (filler_total / words_total *
                            100) if words_total else 0.0
 
