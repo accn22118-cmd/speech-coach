@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from typing import Protocol, List
 
@@ -5,6 +6,8 @@ from faster_whisper import WhisperModel
 
 from app.core.config import settings
 from app.models.transcript import Transcript, TranscriptSegment, WordTiming
+
+logger = logging.getLogger(__name__)
 
 
 class Transcriber(Protocol):
@@ -24,13 +27,21 @@ class LocalWhisperTranscriber:
         device: str | None = None,
         compute_type: str | None = None,
     ):
+        self.model_size = model_size or settings.whisper_model
+        self.device = device or settings.whisper_device
+        self.compute_type = compute_type or settings.whisper_compute_type
+
+        logger.info(f"Loading Whisper model: {
+                    self.model_size} on {self.device}")
         self.model = WhisperModel(
-            model_size or settings.whisper_model,
-            device=device or settings.whisper_device,
-            compute_type=compute_type or settings.whisper_compute_type,
+            self.model_size,
+            device=self.device,
+            compute_type=self.compute_type,
         )
+        logger.info(f"Whisper model loaded successfully")
 
     def transcribe(self, audio_path: Path) -> Transcript:
+<<<<<<< HEAD
         # Стандартная транскрипция (без таймингов слов)
         return self._transcribe_basic(audio_path)
 
@@ -39,10 +50,15 @@ class LocalWhisperTranscriber:
         Транскрибация с таймингами для каждого слова.
         faster-whisper поддерживает word_timestamps=True
         """
+=======
+        logger.info(f"Transcribing audio: {audio_path}")
+
+>>>>>>> feature/gigachat-integration
         # segments — генератор, info — объект с метаданными
         segments_iter, info = self.model.transcribe(
             str(audio_path),
             beam_size=5,
+<<<<<<< HEAD
             word_timestamps=True,  # ← Ключевой параметр!
             vad_filter=True
         )
@@ -90,6 +106,9 @@ class LocalWhisperTranscriber:
         segments_iter, info = self.model.transcribe(
             str(audio_path),
             beam_size=5,
+=======
+            vad_filter=True,  # Включить фильтрацию голосовой активности
+>>>>>>> feature/gigachat-integration
         )
 
         segments: List[TranscriptSegment] = []
@@ -106,5 +125,8 @@ class LocalWhisperTranscriber:
             texts.append(seg.text)
 
         full_text = " ".join(texts).strip()
+
+        logger.info(f"Transcription complete: {len(segments)} segments, {
+                    len(full_text)} characters")
 
         return Transcript(text=full_text, segments=segments)
