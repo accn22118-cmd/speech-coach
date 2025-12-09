@@ -1,8 +1,18 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from app.core.config import settings
 
 router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
-def health_check():
-    return {"status": "ok"}
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "ok",
+        "service": "Speech Coach API",
+        "version": "1.0.0",
+        "features": {
+            "whisper": True,
+            "gigachat": settings.gigachat_enabled
+        }
+    }
