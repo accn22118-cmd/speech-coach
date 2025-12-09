@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Speech Coach API",
-    description="Сервис для анализа качества публичной речи с поддержкой AI-анализа через GigaChat",
+    description="Сервис для анализа качества публичной речи",
     version="1.0.0",
     lifespan=lifespan,
     docs_url="/docs",
@@ -26,8 +26,9 @@ app = FastAPI(
     openapi_url="/openapi.json"
 )
 
-
 # Глобальный обработчик кастомных исключений
+
+
 @app.exception_handler(SpeechCoachException)
 async def speech_coach_exception_handler(request: Request, exc: SpeechCoachException):
     logger.warning(f"SpeechCoachException: {exc.detail}")
@@ -39,8 +40,9 @@ async def speech_coach_exception_handler(request: Request, exc: SpeechCoachExcep
         },
     )
 
+# Обработчик ошибок валидации
 
-# Обработчик ошибок валидации запросов
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     logger.warning(f"Validation error: {exc.errors()}")
@@ -52,8 +54,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         },
     )
 
-
 # Глобальный обработчик неожиданных ошибок
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
@@ -66,16 +69,14 @@ async def global_exception_handler(request: Request, exc: Exception):
         },
     )
 
-
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # В продакшене укажите конкретные origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # Включаем роутеры
 app.include_router(health_router)
@@ -84,22 +85,10 @@ app.include_router(analysis_router)
 
 @app.get("/")
 async def root():
-    """Корневой эндпоинт с информацией о API"""
-    logger.info("Root endpoint accessed")
+    """Корневой эндпоинт"""
     return {
         "name": "Speech Coach API",
         "version": "1.0.0",
-        "description": "Анализ качества публичной речи с AI-анализом",
-        "docs": "/docs",
-        "endpoints": {
-            "health": "/health",
-            "analyze": "/api/v1/analyze"
-        },
-        "features": {
-            "whisper_transcription": True,
-            "speech_metrics": True,
-            "gigachat_analysis": settings.gigachat_enabled,
-            "max_file_size_mb": settings.max_file_size_mb,
-            "supported_formats": settings.allowed_video_extensions
-        }
+        "status": "running",
+        "docs": "/docs"
     }

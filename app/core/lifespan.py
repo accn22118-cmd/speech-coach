@@ -1,7 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from app.api.deps import get_gigachat_client
 
 logger = logging.getLogger(__name__)
 
@@ -9,28 +8,73 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Контекстный менеджер для управления жизненным циклом приложения.
+    Простой lifespan без фоновых задач.
+    Uvicorn сам обрабатывает сигналы завершения.
     """
-    logger.info("Starting Speech Coach API")
+    logger.info("🚀 Запуск Speech Coach API")
 
-    gigachat_client = get_gigachat_client()
-    if gigachat_client:
-        logger.info("GigaChat client initialized and ready")
-        # Предварительная аутентификация
+    # Инициализация состояния
+    app.state.initialized = True
+
+    try:
+        # Быстрая инициализация
+        logger.info("⏳ Инициализация...")
+
+        # Ленивая инициализация GigaChat (при первом запросе)
         try:
-            await gigachat_client.authenticate()
-        except Exception as e:
-            logger.error(f"GigaChat pre-authentication failed: {e}")
-    else:
-        logger.info("GigaChat client not available")
+            from app.core.config import settings
+            if settings.gigachat_enabled:
+                logger.info(
+                    "🔧 GigaChat настроен, будет инициализирован при первом запросе")
+        except:
+            logger.debug("GigaChat не настроен")
 
-    yield
+        logger.info("✅ Приложение готово")
+        yield
 
-    logger.info("Shutting down Speech Coach API")
+    except Exception as e:
+        logger.error(f"💥 Ошибка при запуске: {e}")
+        raise
 
-    if gigachat_client:
+    finally:
+        logger.info("🛑 Завершение работы...")
+
+        # Простая очистка
         try:
-            await gigachat_client.close()
-            logger.info("GigaChat client closed successfully")
-        except Exception as e:
-            logger.error(f"Error closing GigaChat client: {e}")
+            # Закрытие GigaChat, если он был инициализирован
+            if hasattr(app.state, 'gigachat_client'):
+                try:
+                    await app.state.gigachat_client.close()
+                    logger.info("🔒 GigaChat закрыт")
+                except Exception as e:
+                    logger.debug(f"Ошибка закрытия GigaChat: {e}")
+        except:
+            pass
+
+        # Минимальная очистка временных файлов
+        try:
+            import tempfile
+            import os
+            import time
+            import glob
+
+            temp_dir = tempfile.gettempdir()
+            patterns = ["tmp*.mp4", "tmp*.wav", "ffmpeg*"]
+
+            deleted = 0
+            for pattern in patterns:
+                for filepath in glob.glob(os.path.join(temp_dir, pattern)):
+                    try:
+                        # Удаляем только старые файлы (старше 1 часа)
+                        if os.path.exists(filepath) and time.time() - os.path.getmtime(filepath) > 3600:
+                            os.remove(filepath)
+                            deleted += 1
+                    except:
+                        pass
+
+            if deleted:
+                logger.debug(f"🗑️  Удалено {deleted} временных файлов")
+        except:
+            pass
+
+        logger.info("👋 Завершение работы выполнено")

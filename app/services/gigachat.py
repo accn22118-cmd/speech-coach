@@ -366,4 +366,8 @@ class GigaChatClient:
 
     async def close(self):
         """Закрывает HTTP-клиент"""
-        await self.client.aclose()
+        try:
+            await self.client.aclose()
+            logger.debug("GigaChat HTTP клиент закрыт")
+        except Exception as e:
+            logger.debug(f"Ошибка закрытия HTTP клиента: {e}")

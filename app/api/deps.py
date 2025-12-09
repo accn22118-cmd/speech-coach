@@ -1,6 +1,6 @@
 import logging
 from functools import lru_cache
-from typing import Optional  # Убедитесь, что Optional импортирован
+from typing import Optional
 
 from app.services.audio_extractor_advanced import AdvancedFfmpegAudioExtractor
 from app.services.transcriber import LocalWhisperTranscriber
@@ -14,68 +14,50 @@ logger = logging.getLogger(__name__)
 
 @lru_cache(maxsize=1)
 def get_audio_extractor() -> AdvancedFfmpegAudioExtractor:
+    """Создает экстрактор аудио"""
     return AdvancedFfmpegAudioExtractor()
 
 
 @lru_cache(maxsize=1)
 def get_transcriber() -> LocalWhisperTranscriber:
+    """Создает трансскрайбер (загружает модель при первом вызове)"""
     return LocalWhisperTranscriber()
 
 
 @lru_cache(maxsize=1)
 def get_analyzer() -> SpeechAnalyzer:
+    """Создает анализатор речи"""
     return SpeechAnalyzer()
 
 
 @lru_cache(maxsize=1)
 def get_gigachat_client() -> Optional[GigaChatClient]:
-    """Создает и кеширует клиент GigaChat, если настроен и включен"""
+    """Создает клиент GigaChat, если настроен"""
     if not settings.gigachat_enabled:
-        logger.info("GigaChat is disabled in settings")
+        logger.debug("GigaChat отключен в настройках")
         return None
 
     if not settings.gigachat_api_key:
-        logger.warning("GigaChat API key not configured")
+        logger.warning("GigaChat API ключ не настроен")
         return None
 
     try:
-        # Создаем клиент с отключенной SSL проверкой для тестирования
         client = GigaChatClient(verify_ssl=False)
-        logger.info(
-            "GigaChat client created successfully (authentication will happen on demand)")
+        logger.info("GigaChat клиент создан")
         return client
     except Exception as e:
-        logger.error(f"Failed to create GigaChat client: {e}")
+        logger.error(f"Ошибка создания GigaChat клиента: {e}")
         return None
 
 
 @lru_cache(maxsize=1)
 def get_speech_pipeline() -> SpeechAnalysisPipeline:
-    """
-    Создаёт и кеширует единственный экземпляр пайплайна на процесс.
-    Включает GigaChat клиент, если настроен и включен.
-    """
+    """Создает пайплайн анализа"""
     transcriber = get_transcriber()
     analyzer = get_analyzer()
     gigachat_client = get_gigachat_client()
 
-    logger.info(f"Initializing speech pipeline (GigaChat: {
-                'enabled' if gigachat_client else 'disabled'})")
-
-    if gigachat_client:
-        logger.info(f"GigaChat client created: {
-                    gigachat_client.__class__.__name__}")
-        # Пробуем предварительную аутентификацию
-        try:
-            import asyncio
-            # Запускаем в отдельной таске, чтобы не блокировать
-            asyncio.create_task(gigachat_client.authenticate())
-            logger.info("GigaChat pre-authentication started")
-        except Exception as e:
-            logger.warning(f"GigaChat pre-authentication failed: {e}")
-    else:
-        logger.info(
-            "GigaChat client is None, GigaChat analysis will not be available")
+    logger.info(f"Создание пайплайна анализа")
 
     return SpeechAnalysisPipeline(
         transcriber=transcriber,

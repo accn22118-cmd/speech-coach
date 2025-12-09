@@ -1,14 +1,10 @@
-"""
-Модуль пайплайна анализа речи.
-Координирует обработку видеофайла: валидацию, извлечение аудио, транскрипцию, анализ.
-"""
-
 import os
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Optional
 import logging
+import time
 
 from fastapi import UploadFile
 
@@ -16,6 +12,8 @@ from app.services.audio_extractor_advanced import AdvancedFfmpegAudioExtractor, 
 from app.services.transcriber import Transcriber
 from app.services.analyzer import SpeechAnalyzer
 from app.services.gigachat import GigaChatClient
+from app.services.metrics_collector import MetricsCollector
+from app.services.cache import AnalysisCache, cache_analysis
 from app.models.analysis import AnalysisResult
 from app.core.config import settings
 from app.core.exceptions import (
@@ -24,134 +22,133 @@ from app.core.exceptions import (
     TranscriptionError,
     AnalysisError,
 )
+from app.core.validators import FileValidator
 
 logger = logging.getLogger(__name__)
 
 
 class SpeechAnalysisPipeline:
-    """
-    Координирует весь процесс анализа речи:
-    - валидацию загружаемого файла,
-    - сохранение во временный файл,
-    - извлечение аудио,
-    - транскрибацию,
-    - анализ,
-    - расширенный анализ через GigaChat (если включен).
-    """
-
     def __init__(
         self,
         transcriber: Transcriber,
         analyzer: SpeechAnalyzer,
         gigachat_client: Optional[GigaChatClient] = None,
+        enable_cache: bool = True,
+        enable_metrics: bool = True,
     ):
-        # Используем продвинутый экстрактор аудио
         self.audio_extractor = AdvancedFfmpegAudioExtractor()
         self.transcriber = transcriber
         self.analyzer = analyzer
         self.gigachat_client = gigachat_client
 
+        # Инициализация кеша
+        self.cache = None
+        if enable_cache:
+            cache_dir = Path("cache/analysis")
+            self.cache = AnalysisCache(cache_dir, ttl_seconds=settings.cache_ttl if hasattr(
+                settings, 'cache_ttl') else 3600)
+
+        # Инициализация сборщика метрик
+        self.metrics_collector = None
+        if enable_metrics:
+            self.metrics_collector = MetricsCollector(
+                Path("logs/metrics.jsonl"))
+
+    @cache_analysis(ttl_hours=1)
     async def analyze_upload(self, file: UploadFile) -> AnalysisResult:
         """
-        Анализирует загруженное видео и возвращает результаты.
-        Включает расширенный анализ через GigaChat, если настроен.
+        Анализирует загруженное видео с поддержкой кеширования и метрик.
         """
-        # Валидация файла перед обработкой
-        await self._validate_file(file)
-
-        suffix = Path(file.filename or "video").suffix or ".mp4"
-
-        tmp_video = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-        temp_video_path = Path(tmp_video.name)
-        tmp_video.close()
-
-        await self._save_upload_to_path(file, temp_video_path)
-
-        temp_audio_path = temp_video_path.with_suffix(".wav")
+        # Начинаем сбор метрик
+        if self.metrics_collector:
+            await self._start_metrics_collection(file)
 
         try:
-            # 1) Извлекаем аудио из видео
-            logger.info(f"Extracting audio from {temp_video_path.name}")
+            # Валидация файла
+            await self._validate_file(file)
+
+            # Создаем временные файлы
+            temp_video_path, temp_audio_path = await self._create_temp_files(file)
+
             try:
-                self.audio_extractor.extract(
-                    temp_video_path, temp_audio_path, timeout=300)
-            except TimeoutException as e:
-                logger.error(f"Audio extraction timeout: {e}")
-                raise AnalysisError(
-                    "Audio extraction took too long. Video might be too long or corrupted.")
-            except RuntimeError as e:
-                logger.error(f"Audio extraction failed: {e}")
-                error_msg = str(e)
-                if "file does not exist" in error_msg.lower():
-                    raise AnalysisError("Video file is corrupted or empty")
-                elif "already exists" in error_msg.lower():
-                    raise AnalysisError(
-                        "Temporary file conflict, please try again")
-                elif "ffmpeg command not found" in error_msg.lower():
-                    raise AnalysisError(
-                        "FFmpeg is not installed or not in PATH")
-                else:
-                    raise AnalysisError(
-                        f"Failed to extract audio: {error_msg}")
-            except Exception as e:
-                logger.error(f"Audio extraction failed: {e}")
-                raise AnalysisError(f"Failed to extract audio: {str(e)}")
+                # 1) Извлечение аудио
+                if self.metrics_collector:
+                    self.metrics_collector.start_subtask("audio_extraction")
 
-            # 2) Транскрибируем аудио
-            logger.info("Transcribing audio...")
-            try:
-                transcript = self.transcriber.transcribe(temp_audio_path)
-            except Exception as e:
-                logger.error(f"Transcription failed: {e}")
-                raise TranscriptionError(
-                    f"Failed to transcribe audio: {str(e)}")
+                await self._extract_audio(temp_video_path, temp_audio_path)
 
-            # 3) Анализируем с учётом пути к аудио (для оценки пауз)
-            logger.info("Analyzing speech metrics...")
-            try:
-                result = self.analyzer.analyze(
-                    transcript, audio_path=temp_audio_path)
-            except Exception as e:
-                logger.error(f"Analysis failed: {e}")
-                raise AnalysisError(f"Failed to analyze speech: {str(e)}")
+                if self.metrics_collector:
+                    self.metrics_collector.end_subtask("audio_extraction")
 
-            # 4) Запрашиваем расширенный анализ через GigaChat, если настроен
-            if self.gigachat_client and settings.gigachat_enabled:
-                logger.info("Requesting GigaChat analysis...")
-                try:
-                    gigachat_analysis = await self.gigachat_client.analyze_speech(result)
-                    if gigachat_analysis:
-                        logger.info(f"GigaChat analysis received: {
-                                    gigachat_analysis.overall_assessment[:100]}...")
+                # 2) Транскрибация
+                if self.metrics_collector:
+                    self.metrics_collector.start_subtask("transcription")
 
-                        # Ключевое исправление: создаем новый AnalysisResult с gigachat_analysis
-                        result = AnalysisResult(
-                            duration_sec=result.duration_sec,
-                            speaking_time_sec=result.speaking_time_sec,
-                            speaking_ratio=result.speaking_ratio,
-                            words_total=result.words_total,
-                            words_per_minute=result.words_per_minute,
-                            filler_words=result.filler_words,
-                            pauses=result.pauses,
-                            phrases=result.phrases,
-                            advice=result.advice,
-                            transcript=result.transcript,
-                            gigachat_analysis=gigachat_analysis  # Добавляем анализ
-                        )
-                        logger.info(
-                            "GigaChat analysis added to result successfully")
-                    else:
-                        logger.warning("GigaChat analysis returned None")
-                except Exception as e:
-                    logger.error(f"GigaChat analysis failed: {e}")
-                    logger.info("Continuing without GigaChat analysis")
+                transcript = await self._transcribe_audio(temp_audio_path)
 
-            logger.info("Analysis completed successfully")
-            return result
+                if self.metrics_collector:
+                    self.metrics_collector.end_subtask("transcription")
 
-        finally:
-            # Удаляем временные файлы
-            self._cleanup_temp_files(temp_video_path, temp_audio_path)
+                # 3) Анализ
+                if self.metrics_collector:
+                    self.metrics_collector.start_subtask("analysis")
+
+                result = await self._analyze_speech(transcript, temp_audio_path)
+
+                if self.metrics_collector:
+                    self.metrics_collector.end_subtask("analysis")
+                    # Обновляем длительность в метриках
+                    if hasattr(result, 'duration_sec'):
+                        self.metrics_collector._metrics["duration_sec"] = result.duration_sec
+
+                # 4) Расширенный анализ через GigaChat
+                if self.gigachat_client and settings.gigachat_enabled:
+                    result = await self._enhance_with_gigachat(result)
+
+                # Завершаем сбор метрик успехом
+                if self.metrics_collector:
+                    self.metrics_collector.end_processing(success=True)
+
+                logger.info(f"Анализ завершен успешно: {file.filename}")
+                return result
+
+            finally:
+                # Очистка временных файлов
+                self._cleanup_temp_files(temp_video_path, temp_audio_path)
+
+        except Exception as e:
+            # Завершаем сбор метрик с ошибкой
+            if self.metrics_collector:
+                self.metrics_collector.end_processing(
+                    success=False, error_message=str(e))
+
+            # Пробрасываем исключение дальше
+            raise
+
+    async def _start_metrics_collection(self, file: UploadFile):
+        """Начинает сбор метрик"""
+        if not self.metrics_collector:
+            return
+
+        # Читаем размер файла
+        file_size = 0
+        try:
+            # Сохраняем текущую позицию
+            current_pos = await file.tell()
+
+            # Переходим в конец
+            await file.seek(0, 2)
+            file_size = await file.tell()
+
+            # Возвращаемся на место
+            await file.seek(current_pos)
+        except Exception as e:
+            logger.warning(f"Не удалось определить размер файла: {e}")
+
+        self.metrics_collector.start_processing(
+            filename=file.filename or "unknown",
+            file_size=file_size
+        )
 
     async def _validate_file(self, file: UploadFile) -> None:
         """Валидирует загруженный файл"""
@@ -161,97 +158,171 @@ class SpeechAnalysisPipeline:
                 allowed_extensions=settings.allowed_video_extensions
             )
 
-        # Проверка расширения файла
+        # Проверка расширения
         file_ext = Path(file.filename).suffix.lower()
-        if not file_ext:
-            raise UnsupportedFileTypeError(
-                file_extension="no extension",
-                allowed_extensions=settings.allowed_video_extensions
-            )
-
-        if file_ext not in settings.allowed_video_extensions:
+        if not file_ext or file_ext not in settings.allowed_video_extensions:
             raise UnsupportedFileTypeError(
                 file_extension=file_ext,
                 allowed_extensions=settings.allowed_video_extensions
             )
 
-        # Проверка размера файла
+        # Проверка размера
         await self._validate_file_size(file)
 
     async def _validate_file_size(self, file: UploadFile) -> None:
         """Проверяет размер файла"""
         max_size_bytes = settings.max_file_size_mb * 1024 * 1024
 
-        file_size = None
-
-        # Способ 1: Используем атрибут size, если он есть
-        if hasattr(file, 'size'):
-            file_size = file.size
-            logger.debug(f"File size from attribute: {file_size} bytes")
-
-        # Способ 2: Если нет атрибута size, пытаемся определить через seek/tell
-        if file_size is None and hasattr(file.file, 'seekable') and file.file.seekable():
-            try:
-                # Сохраняем текущую позицию
-                original_position = file.file.tell()
-
-                # Переходим в конец файла
-                file.file.seek(0, 2)  # SEEK_END
-                file_size = file.file.tell()
-
-                # Возвращаемся в исходную позицию
-                file.file.seek(original_position)
-                logger.debug(f"File size from seek/tell: {file_size} bytes")
-
-            except (AttributeError, OSError) as e:
-                logger.warning(
-                    f"Could not determine file size via seek/tell: {e}")
-
-        # Способ 3: Читаем содержимое файла для определения размера
-        if file_size is None:
-            logger.warning(
-                "File size unknown, reading file to determine size...")
-            try:
-                # Читаем все содержимое файла
-                content = await file.read()
+        try:
+            # Пытаемся получить размер из атрибута
+            if hasattr(file, 'size') and file.size is not None:
+                file_size = file.size
+            else:
+                # Читаем файл для определения размера
+                content = await file.read(max_size_bytes + 1)
                 file_size = len(content)
 
-                # Возвращаем указатель в начало файла
+                # Возвращаем указатель в начало
                 await file.seek(0)
-                logger.debug(f"File size from reading content: {
-                             file_size} bytes")
 
-            except Exception as e:
-                logger.error(f"Failed to read file for size check: {e}")
-                # Не прерываем выполнение из-за ошибки определения размера
-                # Просто логируем и продолжаем
-                logger.warning(
-                    "Skipping file size validation due to read error")
-                return
-
-        # Теперь проверяем размер, если удалось его определить
-        if file_size is not None:
             if file_size > max_size_bytes:
                 file_size_mb = file_size / (1024 * 1024)
                 raise FileTooLargeError(
                     file_size_mb=file_size_mb,
                     max_size_mb=settings.max_file_size_mb
                 )
+
+            logger.info(f"Файл валиден: {file.filename}, размер: {
+                        file_size / (1024 * 1024):.2f} MB")
+
+        except Exception as e:
+            logger.error(f"Ошибка проверки размера файла: {e}")
+            # Не блокируем выполнение из-за ошибки определения размера
+
+    async def _create_temp_files(self, file: UploadFile) -> tuple[Path, Path]:
+        """Создает временные файлы для обработки"""
+        suffix = Path(file.filename or "video").suffix or ".mp4"
+
+        # Создаем временный видеофайл
+        tmp_video = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        temp_video_path = Path(tmp_video.name)
+        tmp_video.close()
+
+        # Сохраняем загруженный файл
+        await self._save_upload_to_path(file, temp_video_path)
+
+        # Путь для аудиофайла
+        temp_audio_path = temp_video_path.with_suffix(".wav")
+
+        return temp_video_path, temp_audio_path
+
+    async def _extract_audio(self, video_path: Path, audio_path: Path) -> None:
+        """Извлекает аудио из видео"""
+        logger.info(f"Извлечение аудио из {video_path.name}")
+
+        try:
+            self.audio_extractor.extract(video_path, audio_path, timeout=300)
+
+            # Дополнительная валидация аудиофайла
+            if audio_path.exists():
+                file_size = audio_path.stat().st_size
+                if file_size == 0:
+                    raise AnalysisError("Извлеченный аудиофайл пуст")
+                logger.info(f"Аудио извлечено: {file_size:,} байт")
             else:
-                logger.info(f"File size OK: {
-                            file_size / (1024 * 1024):.2f} MB")
-        else:
-            logger.warning(
-                "Could not determine file size, skipping size validation")
+                raise AnalysisError("Аудиофайл не был создан")
+
+        except TimeoutException as e:
+            logger.error(f"Таймаут извлечения аудио: {e}")
+            raise AnalysisError(
+                "Извлечение аудио заняло слишком много времени")
+        except Exception as e:
+            logger.error(f"Ошибка извлечения аудио: {e}")
+            raise AnalysisError(f"Не удалось извлечь аудио: {str(e)}")
+
+    async def _transcribe_audio(self, audio_path: Path):
+        """Транскрибирует аудио"""
+        logger.info("Транскрибация аудио...")
+
+        try:
+            # Валидация аудиофайла перед транскрибацией
+            is_valid, error_msg = FileValidator.validate_audio_file(audio_path)
+            if not is_valid:
+                logger.warning(f"Аудиофайл не прошел валидацию: {error_msg}")
+
+            transcript = self.transcriber.transcribe(audio_path)
+
+            if not transcript.segments or not transcript.text.strip():
+                logger.warning("Транскрипт пуст или содержит только пробелы")
+
+            logger.info(f"Транскрибация завершена: {
+                        len(transcript.segments)} сегментов")
+            return transcript
+
+        except Exception as e:
+            logger.error(f"Ошибка транскрибации: {e}")
+            raise TranscriptionError(
+                f"Не удалось транскрибировать аудио: {str(e)}")
+
+    async def _analyze_speech(self, transcript, audio_path: Path) -> AnalysisResult:
+        """Анализирует речь"""
+        logger.info("Анализ метрик речи...")
+
+        try:
+            result = self.analyzer.analyze(transcript, audio_path=audio_path)
+
+            # Дополнительная проверка результата
+            if result.words_total == 0:
+                logger.warning("В результате анализа 0 слов")
+
+            logger.info(f"Анализ завершен: {result.words_total} слов, темп: {
+                        result.words_per_minute:.1f} WPM")
+            return result
+
+        except Exception as e:
+            logger.error(f"Ошибка анализа речи: {e}")
+            raise AnalysisError(f"Не удалось проанализировать речь: {str(e)}")
+
+    async def _enhance_with_gigachat(self, result: AnalysisResult) -> AnalysisResult:
+        """Добавляет анализ от GigaChat"""
+        logger.info("Запрос расширенного анализа через GigaChat...")
+
+        try:
+            gigachat_analysis = await self.gigachat_client.analyze_speech(result)
+
+            if gigachat_analysis:
+                logger.info(f"GigaChat анализ получен: {
+                            gigachat_analysis.overall_assessment[:100]}...")
+
+                # Создаем новый результат с анализом GigaChat
+                result = AnalysisResult(
+                    duration_sec=result.duration_sec,
+                    speaking_time_sec=result.speaking_time_sec,
+                    speaking_ratio=result.speaking_ratio,
+                    words_total=result.words_total,
+                    words_per_minute=result.words_per_minute,
+                    filler_words=result.filler_words,
+                    pauses=result.pauses,
+                    phrases=result.phrases,
+                    advice=result.advice,
+                    transcript=result.transcript,
+                    gigachat_analysis=gigachat_analysis
+                )
+            else:
+                logger.warning("GigaChat вернул пустой результат")
+
+        except Exception as e:
+            logger.error(f"Ошибка GigaChat анализа: {e}")
+            # Продолжаем без анализа GigaChat
+
+        return result
 
     @staticmethod
     async def _save_upload_to_path(upload: UploadFile, dst: Path) -> None:
-        """Сохраняет загруженный файл на диск"""
-        # Убедимся, что указатель в начале файла
+        """Сохраняет загруженный файл"""
         await upload.seek(0)
 
         with dst.open("wb") as out_file:
-            # Используем chunked чтение для больших файлов
             chunk_size = 1024 * 1024  # 1 MB
             while True:
                 chunk = await upload.read(chunk_size)
@@ -259,9 +330,7 @@ class SpeechAnalysisPipeline:
                     break
                 out_file.write(chunk)
 
-        logger.info(f"File saved to temporary location: {dst}")
-        # Закрываем файл
-        await upload.close()
+        logger.info(f"Файл сохранен: {dst}")
 
     @staticmethod
     def _cleanup_temp_files(*paths: Path) -> None:
@@ -269,34 +338,8 @@ class SpeechAnalysisPipeline:
         for path in paths:
             try:
                 if path.exists():
-                    os.remove(path)
-                    logger.debug(f"Deleted temp file: {path}")
-            except OSError as e:
-                logger.warning(f"Failed to delete temp file {path}: {e}")
-
-    # Метод для обработки локальных файлов (для тестирования)
-    async def analyze_local_file(self, video_path: Path) -> AnalysisResult:
-        """
-        Анализирует локальный видеофайл.
-        Полезно для тестирования и отладки.
-        """
-        if not video_path.exists():
-            raise FileNotFoundError(f"Video file not found: {video_path}")
-
-        # Создаем временный UploadFile для совместимости
-        import io
-        from fastapi import UploadFile as FastAPIUploadFile
-
-        with open(video_path, 'rb') as f:
-            content = f.read()
-
-        # Создаем UploadFile с корректным размером
-        file_bytes = io.BytesIO(content)
-        upload_file = FastAPIUploadFile(
-            filename=video_path.name,
-            file=file_bytes,
-            size=len(content)
-        )
-
-        # Используем основной метод
-        return await self.analyze_upload(upload_file)
+                    path.unlink()
+                    logger.debug(f"Удален временный файл: {path}")
+            except Exception as e:
+                logger.warning(
+                    f"Не удалось удалить временный файл {path}: {e}")

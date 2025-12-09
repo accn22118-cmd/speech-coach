@@ -58,6 +58,15 @@ class Settings(BaseSettings):
         alias="ALLOWED_VIDEO_EXTENSIONS"
     )
 
+    cache_enabled: bool = Field(default=True, alias="CACHE_ENABLED")
+    cache_ttl: int = Field(default=3600, alias="CACHE_TTL")  # 1 час
+    metrics_enabled: bool = Field(default=True, alias="METRICS_ENABLED")
+    max_concurrent_analyses: int = Field(
+        default=5, alias="MAX_CONCURRENT_ANALYSES")
+    cleanup_temp_files: bool = Field(default=True, alias="CLEANUP_TEMP_FILES")
+    temp_file_retention_minutes: int = Field(
+        default=30, alias="TEMP_FILE_RETENTION_MINUTES")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
