@@ -28,7 +28,7 @@ source .venv/bin/activate
 .venv\\Scripts\\activate
 
 # Установка зависимостей
-pip install -r requirements.txt
+pip install -r requirements.txt requirements-ci.txt
 
 # Настройка конфигурации
 cp .env.example .env
@@ -38,6 +38,7 @@ mkdir -p logs cache
 
 # Запуск сервера разработки
 uvicorn app.main:app --reload
+```
 
 ## Тесты
 
@@ -49,7 +50,6 @@ pytest -q
 ```
 
 В CI используется workflow `.github/workflows/ci.yml`, который устанавливает минимальные зависимости из `requirements-ci.txt` и запускает `pytest` на push/PR.
-```
 
 После запуска API будет доступен по адресу `http://127.0.0.1:8000`. Интерактивная документация (Swagger UI) доступна по пути `/docs`.
 
