@@ -656,8 +656,7 @@ class GigaChatClient:
             response = await self.client.post(chat_url, json=request_data, headers=headers)
 
             if response.status_code != 200:
-                logger.error(f"GigaChat API error {
-                             response.status_code}: {response.text}")
+                logger.error(f"GigaChat API error {response.status_code}: {response.text}")
                 processing_time = time.time() - start_time
                 return self._create_error_response("GigaChat API error", processing_time)
 
@@ -671,21 +670,19 @@ class GigaChatClient:
             content = result["choices"][0]["message"]["content"]
             processing_time = time.time() - start_time
 
-            logger.info(f"GigaChat detailed analysis received in {
-                        processing_time:.1f} seconds")
+            logger.info(f"GigaChat detailed analysis received in {processing_time:.1f} seconds")
 
-            try:
-                # Пробуем распарсить JSON с несколькими попытками
-                parsed_content = self._parse_json_with_retries(content)
-                
-                if parsed_content is not None:
-                    parsed_content["processing_time_sec"] = processing_time
-                    return parsed_content
-                else:
-                    logger.warning("Failed to parse GigaChat detailed response after retries")
-                    logger.debug(f"Raw content: {content[:2000]}...")
-                    processing_time = time.time() - start_time
-                    return self._create_error_response("JSON parse error after retries", processing_time)
+            # Пробуем распарсить JSON с несколькими попытками
+            parsed_content = self._parse_json_with_retries(content)
+            
+            if parsed_content is not None:
+                parsed_content["processing_time_sec"] = processing_time
+                return parsed_content
+            else:
+                logger.warning("Failed to parse GigaChat detailed response after retries")
+                logger.debug(f"Raw content: {content[:2000]}...")
+                processing_time = time.time() - start_time
+                return self._create_error_response("JSON parse error after retries", processing_time)
 
         except httpx.RequestError as e:
             logger.error(f"GigaChat API request failed: {e}")
