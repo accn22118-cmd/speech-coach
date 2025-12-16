@@ -34,8 +34,6 @@ class WordTiming(BaseModel):
         None, description="Контекст перед словом (2-3 слова)")
     context_after: Optional[str] = Field(
         None, description="Контекст после слова (2-3 слова)")
-    emotion_score: Optional[float] = Field(
-        None, ge=0.0, le=1.0, description="Оценка эмоциональности (0-1)")
 
 
 class FillerWordDetail(BaseModel):
@@ -102,8 +100,6 @@ class PhraseDetail(BaseModel):
     is_complex: bool = Field(False, description="Является ли фраза сложной")
     clarity_score: float = Field(
         0.0, ge=0.0, le=1.0, description="Оценка ясности (0-1)")
-    emotion_score: float = Field(
-        0.0, ge=0.0, le=1.0, description="Оценка эмоциональности (0-1)")
 
 
 class QuestionDetail(BaseModel):
@@ -242,10 +238,6 @@ class TimedAnalysisResult(BaseModel):
     intensity_profile: List[Dict[str, float]] = Field(
         default_factory=list,
         description="Профиль интенсивности речи"
-    )
-    emotion_timeline: List[Dict[str, Any]] = Field(
-        default_factory=list,
-        description="Временная шкала эмоциональности"
     )
 
     # Анализ GigaChat

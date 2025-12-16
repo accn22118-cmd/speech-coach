@@ -152,7 +152,6 @@ class AdvancedSpeechAnalyzer:
             speech_activity=speech_activity,
             speech_rate_windows=speech_rate_windows,
             intensity_profile=intensity_profile,
-            emotion_timeline=emotion_timeline,
 
             # GigaChat анализ (будет добавлен позже)
             gigachat_analysis=None,
@@ -199,8 +198,7 @@ class AdvancedSpeechAnalyzer:
                 is_filler=is_filler,
                 is_hesitation=is_hesitation,
                 context_before=context_before,
-                context_after=context_after,
-                emotion_score=None
+                context_after=context_after
             ))
 
         return advanced_words
@@ -593,8 +591,7 @@ class AdvancedSpeechAnalyzer:
                 avg_pause_duration=0,
                 complexity_score=0,
                 is_complex=False,
-                clarity_score=0,
-                emotion_score=0
+                clarity_score=0
             )
 
         start = words[0].start
@@ -632,8 +629,7 @@ class AdvancedSpeechAnalyzer:
         clarity_score = self._calculate_clarity_score(
             words, avg_pause_duration)
 
-        # Эмоциональность (теперь не определяется по аудио, поэтому 0)
-        emotion_score = 0
+
 
         return PhraseDetail(
             id=phrase_id,
@@ -649,8 +645,7 @@ class AdvancedSpeechAnalyzer:
             avg_pause_duration=avg_pause_duration,
             complexity_score=complexity_score,
             is_complex=is_complex,
-            clarity_score=clarity_score,
-            emotion_score=emotion_score
+            clarity_score=clarity_score
         )
 
     # Вспомогательные методы
